@@ -1,4 +1,4 @@
-# pebble-fctx
+# pebble-fctx-lite
 
 This is a graphics library for the Pebble smart watch.
 
@@ -73,23 +73,16 @@ To draw a filled shape, call `fctx_begin_fill` then call any number of plotting 
 
 ### Color
     void fctx_set_fill_color(FContext* fctx, GColor c);
-    void fctx_set_color_bias(FContext* fctx, int16_t bias);
 
-The current color and bias are applied when `fctx_end_fill` is called.  The bias value is applied as an adjustment to the 'pixel coverage' value in the anti-aliasing calculations.  Meaningful values are -8 to +8, though positive values are not really useful in practice.  Negative values are effectively an opacity setting.  -8 would be completely transparent.
+The current color are applied when `fctx_end_fill` is called.
 
 ### Transform
-    void fctx_set_pivot(FContext* fctx, FPoint pivot);
-    void fctx_set_scale(FContext* fctx, FPoint scale_from, FPoint scale_to);
-    void fctx_set_rotation(FContext* fctx, uint32_t rotation);
     void fctx_set_offset(FContext* fctx, FPoint offset);
 
-The current transform state is applied at the time a `draw` function is called.  Transform components are applied in the following order:  pivot, scale, rotation, then offset.
-
-The pivot point is distinct from the offset in that it is subtracted from the incoming points (whereas the offset is added) and it is applied before the other transformations (whereas offset is applied last).  Setting the pivot point effectively redefines the zero point of the shapes that are drawn.
+The current transform state is applied at the time a `draw` function is called.
 
 ### Primitive plotting
     void fctx_plot_edge(FContext* fctx, FPoint* a, FPoint* b);
-    void fctx_plot_circle(FContext* fctx, const FPoint* c, fixed_t r);
 
 The plotting functions are the lowest level drawing functions.  They do not apply the current transform state to the coordinates.
 
@@ -98,18 +91,7 @@ The plotting functions are the lowest level drawing functions.  They do not appl
 
 Path (i.e. polygon) drawing respects the current transform state.  It draws an array of points as a closed polygon, automatically connecting the last and first points.
 
-### Stateful drawing
-    void fctx_move_to(FContext* fctx, FPoint p);
-    void fctx_line_to(FContext* fctx, FPoint p);
-    void fctx_curve_to(FContext* fctx, FPoint cp0, FPoint cp1, FPoint p);
-    void fctx_close_path(FContext* fctx);
-
-The stateful draw commands respect the current transform state.  `fctx_curve_to` draws cubic spline (bezier) segments.  The shape is *not* automatically closed.
-
 ### Compiled SVG path drawing
-    FPath* fpath_load_from_resource_into_buffer(uint32_t resource_id, void* buffer);
-    FPath* fpath_create_from_resource(uint32_t resource_id);
-    void fpath_destroy(FPath* fpath);
     void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_t length);
 
 The `advance` parameter is an offset that is applied before the regular transform state is applied.
@@ -117,14 +99,11 @@ Compiled path resources are built by the [fctx-compiler](#resource-compiler) too
 
 ### Text drawing
     void fctx_set_text_em_height(FContext* fctx, FFont* font, int16_t pixels);
-    void fctx_set_text_cap_height(FContext* fctx, FFont* font, int16_t pixels);
-    fixed_t fctx_string_width(FContext* fctx, const char* text, FFont* font);
     void fctx_draw_string(FContext* fctx, const char* text, FFont* font, GTextAlignment alignment, FTextAnchor anchor);
 
-The `fctx_set_text_em_height` function is a convenience method that calls `fctx_set_scale` with values to achieve a specific text em-height size (in pixels).  Similarly, the `fctx_set_text_cap_height` function achieves a specific cap-height.
+The `fctx_set_text_em_height` function is a convenience method that calls `fctx_set_scale` with values to achieve a specific text em-height size (in pixels).
 
 ### Fonts
-    FFont* ffont_load_from_resource_into_buffer(uint32_t resource_id, void* buffer);
     FFont* ffont_create_from_resource(uint32_t resource_id);
     void ffont_destroy(FFont* font);
 
