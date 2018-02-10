@@ -585,8 +585,6 @@ void fctx_curve_to_func(FContext* fctx, FPoint* params) {
     fctx->path_cur_point = params[2];
 }
 
-typedef void (*fctx_draw_cmd_func)(FContext* fctx, FPoint* params);
-
 void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPoint* tpoints, FPoint advance) {
 
     /* transform the parameters */
@@ -612,12 +610,11 @@ void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPo
 
 void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_t length) {
 
-    fctx_draw_cmd_func func;
-    uint16_t pcount;
-    FPoint initpt = {0, 0};
-    FPoint curpt = {0, 0};
-    FPoint ctrlpt = {0, 0};
+    FPoint initpt = FPointZero;
+    FPoint curpt = FPointZero;
+    FPoint ctrlpt = FPointZero;
     FPoint ppoints[3];
+    FPoint tpoints[3];
 
     void* path_data_end = path_data + length;
     while (path_data < path_data_end) {
@@ -627,43 +624,41 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
         fixed16_t* param = (fixed16_t*)&cmd->params;
         switch (cmd->code) {
             case 'M': // "moveto"
-                func = fctx_move_to_func;
-                pcount = 1;
                 ppoints[0].x = *param++;
                 ppoints[0].y = *param++;
                 curpt = ppoints[0];
                 initpt = curpt;
+                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                fctx_move_to_func(fctx, tpoints);
                 break;
             case 'Z': // "closepath"
-                func = fctx_line_to_func;
-                pcount = 1;
                 ppoints[0] = initpt;
                 curpt = ppoints[0];
+                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                fctx_line_to_func(fctx, tpoints);
                 break;
             case 'L': // "lineto"
-                func = fctx_line_to_func;
-                pcount = 1;
                 ppoints[0].x = *param++;
                 ppoints[0].y = *param++;
                 curpt = ppoints[0];
+                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                fctx_line_to_func(fctx, tpoints);
                 break;
             case 'H': // "horizontal lineto"
-                func = fctx_line_to_func;
-                pcount = 1;
                 ppoints[0].x = *param++;
                 ppoints[0].y = curpt.y;
                 curpt.x = ppoints[0].x;
+                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                fctx_line_to_func(fctx, tpoints);
                 break;
             case 'V': // "vertical lineto"
-                func = fctx_line_to_func;
-                pcount = 1;
                 ppoints[0].x = curpt.x;
                 ppoints[0].y = *param++;
                 curpt.y = ppoints[0].y;
+                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                fctx_line_to_func(fctx, tpoints);
                 break;
             case 'C': // "cubic bezier curveto"
-                func = fctx_curve_to_func;
-                pcount = 3;
                 ppoints[0].x = *param++;
                 ppoints[0].y = *param++;
                 ppoints[1].x = *param++;
@@ -672,10 +667,10 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
                 ppoints[2].y = *param++;
                 ctrlpt = ppoints[1];
                 curpt = ppoints[2];
+                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                fctx_curve_to_func(fctx, tpoints);
                 break;
             case 'S': // "smooth cubic bezier curveto"
-                func = fctx_curve_to_func;
-                pcount = 3;
                 ppoints[1].x = *param++;
                 ppoints[1].y = *param++;
                 ppoints[2].x = *param++;
@@ -684,10 +679,10 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
                 ppoints[0].y = curpt.y - ctrlpt.y + curpt.y;
                 ctrlpt = ppoints[1];
                 curpt = ppoints[2];
+                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                fctx_curve_to_func(fctx, tpoints);
                 break;
             case 'Q': // "quadratic bezier curveto"
-                func = fctx_curve_to_func;
-                pcount = 3;
                 ctrlpt.x = *param++;
                 ctrlpt.y = *param++;
                 ppoints[2].x = *param++;
@@ -697,10 +692,10 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
                 ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
                 ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
                 curpt = ppoints[2];
+                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                fctx_curve_to_func(fctx, tpoints);
                 break;
             case 'T': // "smooth quadratic bezier curveto"
-                func = fctx_curve_to_func;
-                pcount = 3;
                 ctrlpt.x = curpt.x - ctrlpt.x + curpt.x;
                 ctrlpt.y = curpt.y - ctrlpt.y + curpt.y;
                 ppoints[2].x = *param++;
@@ -710,6 +705,8 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
                 ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
                 ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
                 curpt = ppoints[2];
+                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                fctx_curve_to_func(fctx, tpoints);
                 break;
             default:
                 APP_LOG(APP_LOG_LEVEL_ERROR, "invalid draw command %d", cmd->code);
@@ -718,12 +715,6 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
 
         /* advance to next draw command */
         path_data = (void*)param;
-
-        if (func) {
-            FPoint tpoints[3];
-            fctx_transform_points(fctx, pcount, ppoints, tpoints, advance);
-            func(fctx, tpoints);
-        }
     }
 }
 
@@ -740,7 +731,7 @@ void fctx_set_text_em_height(FContext* fctx, FFont* font, int16_t pixels) {
 
 void fctx_draw_string(FContext* fctx, const char* text, FFont* font, GTextAlignment alignment, FTextAnchor anchor) {
 
-    FPoint advance = {0, 0};
+    FPoint advance = FPointZero;
     uint16_t code_point;
     uint16_t decode_state;
     const char* p;
