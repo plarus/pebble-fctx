@@ -6,6 +6,7 @@ typedef struct __attribute__((__packed__)) FFont {
     fixed16_t units_per_em;
     fixed16_t ascent;
     fixed16_t descent;
+    fixed16_t cap_height;
     uint16_t glyph_index_length;
     uint16_t glyph_table_length;
 } FFont;
