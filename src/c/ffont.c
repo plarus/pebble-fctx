@@ -12,16 +12,6 @@ FFont* ffont_create_from_resource(uint32_t resource_id) {
     return NULL;
 }
 
-FFont* ffont_load_from_resource_into_buffer(uint32_t resource_id, void* buffer) {
-    ResHandle rh = resource_get_handle(resource_id);
-    size_t rs = resource_size(rh);
-    if (buffer) {
-        resource_load(rh, buffer, rs);
-        return (FFont*)buffer;
-    }
-    return NULL;
-}
-
 FGlyphRange* ffont_glyph_index(FFont* font) {
     void* buffer = (void*)font;
     void* index = buffer + sizeof(FFont);
@@ -72,6 +62,7 @@ void* ffont_glyph_outline(FFont* font, FGlyph* glyph) {
     return path_data + glyph->path_data_offset;
 }
 
+#if 0
 void ffont_debug_log(FFont* font, uint8_t log_level) {
     if (log_level >= APP_LOG_LEVEL_WARNING && font == NULL) {
         APP_LOG(APP_LOG_LEVEL_WARNING, "font not loaded");
@@ -103,6 +94,7 @@ void ffont_debug_log(FFont* font, uint8_t log_level) {
         }
     }
 }
+#endif
 
 void ffont_destroy(FFont* font) {
     free(font);

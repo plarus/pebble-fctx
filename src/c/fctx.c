@@ -1,8 +1,9 @@
 
 #include "fctx.h"
 #include "ffont.h"
+#include "pebble-utf8.h"
 #include <stdlib.h>
-#include <pebble-utf8/pebble-utf8.h>
+
 
 /*
  * Credit where credit is due:
@@ -34,6 +35,8 @@
  */
 
 #define Assert(Expression) if(!(Expression)) {*(int *)0 = 0;}
+
+#define MAX_ANGLE_TOLERANCE ((TRIG_MAX_ANGLE / 360) * 5)
 
 bool checkObject(void* obj, const char* objname) {
     if (!obj) {
@@ -113,25 +116,8 @@ void fctx_set_fill_color(FContext* fctx, GColor c) {
     fctx->fill_color = c;
 }
 
-void fctx_set_color_bias(FContext* fctx, int16_t bias) {
-    fctx->color_bias = bias;
-}
-
-void fctx_set_pivot(FContext* fctx, FPoint pivot) {
-    fctx->transform_pivot = pivot;
-}
-
 void fctx_set_offset(FContext* fctx, FPoint offset) {
     fctx->transform_offset = offset;
-}
-
-void fctx_set_scale(FContext* fctx, FPoint scale_from, FPoint scale_to) {
-    fctx->transform_scale_from = scale_from;
-    fctx->transform_scale_to = scale_to;
-}
-
-void fctx_set_rotation(FContext* fctx, uint32_t rotation) {
-    fctx->transform_rotation = rotation;
 }
 
 // --------------------------------------------------------------------------
@@ -179,11 +165,9 @@ void fctx_init_context_bw(FContext* fctx, GContext* gctx) {
 
         fctx->gctx = gctx;
         fctx->subpixel_adjust = -FIXED_POINT_SCALE / 2;
-        fctx->transform_pivot = FPointZero;
         fctx->transform_offset = FPointZero;
         fctx->transform_scale_from = FPointOne;
         fctx->transform_scale_to = FPointOne;
-        fctx->transform_rotation = 0;
     }
 }
 
@@ -235,53 +219,6 @@ static inline void fctx_plot_point_bw(FContext* fctx, int16_t x, int16_t y) {
             uint8_t mask = 1 << (x % 8);
             *p ^= mask;
         }
-    }
-}
-
-void fctx_plot_circle_bw(FContext* fctx, const FPoint* fc, fixed_t fr) {
-
-    /* Expand the bounding box of pixels drawn. */
-    if ((fc->x-fr) < fctx->extent_min.x) fctx->extent_min.x = fc->x - fr;
-    if ((fc->y-fr) < fctx->extent_min.y) fctx->extent_min.y = fc->y - fr;
-    if ((fc->x+fr) > fctx->extent_max.x) fctx->extent_max.x = fc->x + fr;
-    if ((fc->y+fr) > fctx->extent_max.y) fctx->extent_max.y = fc->y + fr;
-
-    int16_t r = FIXED_TO_INT(fr);
-    int16_t cx = FIXED_TO_INT(fc->x);
-    int16_t cy = FIXED_TO_INT(fc->y);
-
-    fixed_t x = r - 1;
-    fixed_t y = 0;
-    fixed_t E = 1 - 2*r;
-    while (x >= y) {
-
-        fctx_plot_point_bw(fctx, cx-x-1, cy+y);
-        fctx_plot_point_bw(fctx, cx+x+1, cy+y);
-        fctx_plot_point_bw(fctx, cx-x-1, cy-y-1);
-        fctx_plot_point_bw(fctx, cx+x+1, cy-y-1);
-
-        E += 4*y + 4;
-        if (E > 0) {
-
-            /* Only plot the diagonally reflected octants when we
-             * are going to step in x (but before the step).
-             * This way, we only plot the one, maximal span
-             * for each reflected row.
-             * Also, do not plot these octants when m==n,
-             * since that would double-plot the same points, which,
-             * with the edge-flag algorithm, complete erases the span!
-             */
-            if (x != y) {
-                fctx_plot_point_bw(fctx, cx-y-1, cy+x);
-                fctx_plot_point_bw(fctx, cx+y+1, cy+x);
-                fctx_plot_point_bw(fctx, cx-y-1, cy-x-1);
-                fctx_plot_point_bw(fctx, cx+y+1, cy-x-1);
-            }
-
-            E += -4*x;
-            --x;
-        }
-        ++y;
     }
 }
 
@@ -425,13 +362,10 @@ void fctx_init_context_aa(FContext* fctx, GContext* gctx) {
         fctx->gctx = gctx;
         fctx->flag_buffer = gbitmap_create_blank(fctx->flag_bounds.size, format);
         fctx->fill_color = GColorWhite;
-        fctx->color_bias = 0;
         fctx->subpixel_adjust = -1;
-        fctx->transform_pivot = FPointZero;
         fctx->transform_offset = FPointZero;
         fctx->transform_scale_from = FPointOne;
         fctx->transform_scale_to = FPointOne;
-        fctx->transform_rotation = 0;
     }
 }
 
@@ -488,56 +422,6 @@ static inline void fctx_plot_point_aa(FContext* fctx, fixed_t x, fixed_t y) {
     }
 }
 
-void fctx_plot_circle_aa(FContext* fctx, const FPoint* c, fixed_t r) {
-
-    /* Expand the bounding box of pixels drawn. */
-    if ((c->x-r) < fctx->extent_min.x) fctx->extent_min.x = c->x - r;
-    if ((c->y-r) < fctx->extent_min.y) fctx->extent_min.y = c->y - r;
-    if ((c->x+r) > fctx->extent_max.x) fctx->extent_max.x = c->x + r;
-    if ((c->y+r) > fctx->extent_max.y) fctx->extent_max.y = c->y + r;
-
-    /* Throw away the extra bit of fixed point precision and
-     * work directly in subpixels.
-     */
-    r = r / 2;
-    fixed_t cx = c->x / 2;
-    fixed_t cy = c->y / 2;
-
-    fixed_t m = r - 1;
-    fixed_t n = 0;
-    fixed_t E = 1 - 2*r;
-    while (m >= n) {
-
-        fctx_plot_point_aa(fctx, cx-m-1, cy+n);
-        fctx_plot_point_aa(fctx, cx+m+1, cy+n);
-        fctx_plot_point_aa(fctx, cx-m-1, cy-n-1);
-        fctx_plot_point_aa(fctx, cx+m+1, cy-n-1);
-
-        E += 4*n + 4;
-        if (E > 0) {
-
-            /* Only plot the diagonally reflected octants when we
-             * are going to step in x (but before the step).
-             * This way, we only plot the one, maximal span
-             * for each reflected row.
-             * Also, do not plot these octants when m==n,
-             * since that would double-plot the same points, which,
-             * with the edge-flag algorithm, complete erases the span!
-             */
-            if (m != n) {
-                fctx_plot_point_aa(fctx, cx-n-1, cy+m);
-                fctx_plot_point_aa(fctx, cx+n+1, cy+m);
-                fctx_plot_point_aa(fctx, cx-n-1, cy-m-1);
-                fctx_plot_point_aa(fctx, cx+n+1, cy-m-1);
-            }
-
-            E += -4*m;
-            --m;
-        }
-        ++n;
-    }
-}
-
 // count the number of bits set in v
 uint8_t countBits(uint8_t v) {
     unsigned int c; // c accumulates the total bits set in v
@@ -569,7 +453,6 @@ void fctx_end_fill_aa(FContext* fctx) {
 
     GColor8 d;
     GColor8 s = fctx->fill_color;
-    int16_t bias = fctx->color_bias;
     for (row = rowMin; row <= rowMax; ++row) {
         GBitmapDataRowInfo fbRowInfo = gbitmap_get_data_row_info(fb, row);
         GBitmapDataRowInfo flagRowInfo = gbitmap_get_data_row_info(fctx->flag_buffer, row);
@@ -583,7 +466,7 @@ void fctx_end_fill_aa(FContext* fctx) {
 
             mask ^= *src;
             *src = 0;
-            uint8_t a = clamp8(countBits(mask) + bias, 0, 8);
+            uint8_t a = clamp8(countBits(mask), 0, 8);
             if (a) {
                 d.argb = *dest;
                 d.r = (s.r*a + d.r*(8 - a) + 4) / 8;
@@ -602,19 +485,16 @@ void fctx_end_fill_aa(FContext* fctx) {
 // Initialize for Anti-Aliased rendering.
 fctx_init_context_func   fctx_init_context   = &fctx_init_context_aa;
 fctx_plot_edge_func      fctx_plot_edge      = &fctx_plot_edge_aa;
-fctx_plot_circle_func    fctx_plot_circle    = &fctx_plot_circle_aa;
 fctx_end_fill_func       fctx_end_fill       = &fctx_end_fill_aa;
 
 void fctx_enable_aa(bool enable) {
     if (enable) {
         fctx_init_context   = &fctx_init_context_aa;
         fctx_plot_edge      = &fctx_plot_edge_aa;
-        fctx_plot_circle    = &fctx_plot_circle_aa;
         fctx_end_fill       = &fctx_end_fill_aa;
     } else {
         fctx_init_context   = &fctx_init_context_bw;
         fctx_plot_edge      = &fctx_plot_edge_bw;
-        fctx_plot_circle    = &fctx_plot_circle_bw;
         fctx_end_fill       = &fctx_end_fill_bw;
     }
 }
@@ -628,7 +508,6 @@ bool fctx_is_aa_enabled() {
 // Initialize for Black & White rendering.
 fctx_init_context_func   fctx_init_context   = &fctx_init_context_bw;
 fctx_plot_edge_func      fctx_plot_edge      = &fctx_plot_edge_bw;
-fctx_plot_circle_func    fctx_plot_circle    = &fctx_plot_circle_bw;
 fctx_end_fill_func       fctx_end_fill       = &fctx_end_fill_bw;
 
 #endif
@@ -642,9 +521,6 @@ static void bezier(FContext* fctx,
             fixed_t x2, fixed_t y2,
             fixed_t x3, fixed_t y3,
             fixed_t x4, fixed_t y4) {
-
-    // Angle below which we're not going to process with recursion
-    static const int32_t max_angle_tolerance = (TRIG_MAX_ANGLE / 360) * 5;
 
     // Calculate all the mid-points of the line segments
     fixed_t x12   = (x1 + x2) / 2;
@@ -676,7 +552,7 @@ static void bezier(FContext* fctx,
         da2 = TRIG_MAX_ANGLE - da2;
     }
 
-    if (da1 + da2 < max_angle_tolerance) {
+    if (da1 + da2 < MAX_ANGLE_TOLERANCE) {
         // Finally we can stop the recursion
         FPoint a = {x1, y1};
         FPoint b = {x4, y4};
@@ -713,18 +589,15 @@ typedef void (*fctx_draw_cmd_func)(FContext* fctx, FPoint* params);
 
 void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPoint* tpoints, FPoint advance) {
 
-    int32_t c = cos_lookup(fctx->transform_rotation);
-    int32_t s = sin_lookup(fctx->transform_rotation);
-
     /* transform the parameters */
     FPoint* src = ppoints;
     FPoint* dst = tpoints;
     FPoint* end = dst + pcount;
     while (dst != end) {
-        fixed_t x = (src->x - fctx->transform_pivot.x + advance.x) * fctx->transform_scale_to.x / fctx->transform_scale_from.x;
-        fixed_t y = (src->y - fctx->transform_pivot.y + advance.y) * fctx->transform_scale_to.y / fctx->transform_scale_from.y;
-        dst->x = (x * c / TRIG_MAX_RATIO) - (y * s / TRIG_MAX_RATIO);
-        dst->y = (x * s / TRIG_MAX_RATIO) + (y * c / TRIG_MAX_RATIO);
+        fixed_t x = (src->x + advance.x) * fctx->transform_scale_to.x / fctx->transform_scale_from.x;
+        fixed_t y = (src->y + advance.y) * fctx->transform_scale_to.y / fctx->transform_scale_from.y;
+        dst->x = x / TRIG_MAX_RATIO;
+        dst->y = y / TRIG_MAX_RATIO;
         dst->x += fctx->transform_offset.x + fctx->subpixel_adjust;
         dst->y += fctx->transform_offset.y + fctx->subpixel_adjust;
 
@@ -736,50 +609,6 @@ void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPo
 
         ++src;
         ++dst;
-    }
-}
-
-static void exec_draw_func(FContext* fctx, FPoint advance, fctx_draw_cmd_func func, FPoint* ppoints, uint16_t pcount) {
-    FPoint tpoints[3];
-    fctx_transform_points(fctx, pcount, ppoints, tpoints, advance);
-    func(fctx, tpoints);
-}
-
-void fctx_move_to(FContext* fctx, FPoint p) {
-    exec_draw_func(fctx, FPointZero, fctx_move_to_func, &p, 1);
-}
-
-void fctx_line_to(FContext* fctx, FPoint p) {
-    exec_draw_func(fctx, FPointZero, fctx_line_to_func, &p, 1);
-}
-
-void fctx_curve_to(FContext* fctx, FPoint cp0, FPoint cp1, FPoint p) {
-    FPoint points[3];
-    points[0] = cp0;
-    points[1] = cp1;
-    points[2] = p;
-    exec_draw_func(fctx, FPointZero, fctx_curve_to_func, points, 3);
-}
-
-void fctx_close_path(FContext* fctx) {
-    fctx_plot_edge(fctx, &fctx->path_cur_point, &fctx->path_init_point);
-    fctx->path_cur_point = fctx->path_init_point;
-}
-
-void fctx_draw_path_with_buffer(FContext* fctx, FPoint* points, FPoint* buffer, uint32_t num_points) {
-
-    fctx_transform_points(fctx, num_points, points, buffer, FPointZero);
-    for (uint32_t k = 0; k < num_points; ++k) {
-        fctx_plot_edge(fctx, buffer+k, buffer+((k+1) % num_points));
-    }
-}
-
-void fctx_draw_path(FContext* fctx, FPoint* points, uint32_t num_points) {
-
-    FPoint* buffer = (FPoint*)malloc(num_points * sizeof(FPoint));
-    if (buffer) {
-        fctx_draw_path_with_buffer(fctx, points, buffer, num_points);
-        free(buffer);
     }
 }
 
@@ -893,7 +722,9 @@ void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_
         path_data = (void*)param;
 
         if (func) {
-            exec_draw_func(fctx, advance, func, ppoints, pcount);
+            FPoint tpoints[3];
+            fctx_transform_points(fctx, pcount, ppoints, tpoints, advance);
+            func(fctx, tpoints);
         }
     }
 }
@@ -907,28 +738,6 @@ void fctx_set_text_em_height(FContext* fctx, FFont* font, int16_t pixels) {
     fctx->transform_scale_from.y = -fctx->transform_scale_from.x;
     fctx->transform_scale_to.x = pixels;
     fctx->transform_scale_to.y = pixels;
-}
-
-void fctx_set_text_cap_height(FContext* fctx, FFont* font, int16_t pixels) {
-    fctx->transform_scale_from.x = FIXED_TO_INT(font->cap_height);
-    fctx->transform_scale_from.y = -fctx->transform_scale_from.x;
-    fctx->transform_scale_to.x = pixels;
-    fctx->transform_scale_to.y = pixels;
-}
-
-fixed_t fctx_string_width(FContext* fctx, const char* text, FFont* font) {
-    uint16_t code_point;
-    uint16_t decode_state = 0;
-    fixed_t width = 0;
-    for (const char* p = text; *p; ++p) {
-        if (0 == utf8_decode_byte(*p, &decode_state, &code_point)) {
-            FGlyph* glyph = ffont_glyph_info(font, code_point);
-            if (glyph) {
-                width += glyph->horiz_adv_x;
-            }
-        }
-    }
-    return width * fctx->transform_scale_to.x / fctx->transform_scale_from.x;
 }
 
 void fctx_draw_string(FContext* fctx, const char* text, FFont* font, GTextAlignment alignment, FTextAnchor anchor) {
@@ -960,12 +769,8 @@ void fctx_draw_string(FContext* fctx, const char* text, FFont* font, GTextAlignm
         advance.y = -font->descent;
     } else if (anchor == FTextAnchorMiddle) {
         advance.y = -font->ascent / 2;
-    } else if (anchor == FTextAnchorCapMiddle) {
-        advance.y = -font->cap_height / 2;
     } else if (anchor == FTextAnchorTop) {
         advance.y = -font->ascent;
-    } else if (anchor == FTextAnchorCapTop) {
-        advance.y = -font->cap_height;
     } else /* anchor == FTextAnchorBaseline) */ {
         advance.y = 0;
     }
