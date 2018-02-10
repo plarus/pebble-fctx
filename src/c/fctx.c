@@ -594,10 +594,8 @@ void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPo
     FPoint* dst = tpoints;
     FPoint* end = dst + pcount;
     while (dst != end) {
-        fixed_t x = (src->x + advance.x) * fctx->transform_scale_to.x / fctx->transform_scale_from.x;
-        fixed_t y = (src->y + advance.y) * fctx->transform_scale_to.y / fctx->transform_scale_from.y;
-        dst->x = x / TRIG_MAX_RATIO;
-        dst->y = y / TRIG_MAX_RATIO;
+        dst->x = (src->x + advance.x) * fctx->transform_scale_to.x / fctx->transform_scale_from.x;
+        dst->y = (src->y + advance.y) * fctx->transform_scale_to.y / fctx->transform_scale_from.y;
         dst->x += fctx->transform_offset.x + fctx->subpixel_adjust;
         dst->y += fctx->transform_offset.y + fctx->subpixel_adjust;
 
