@@ -1,7 +1,6 @@
 
 #include "fctx.h"
 #include "ffont.h"
-#include "pebble-utf8.h"
 #include <stdlib.h>
 
 
