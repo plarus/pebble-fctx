@@ -191,16 +191,13 @@ void fctx_plot_edge_bw(FContext* fctx, FPoint* a, FPoint* b) {
     while (edge.height > 0 && edge.y <= max_y) {
         if (edge.x < 0) {
             uint8_t* p = data + edge.y * stride;
-            uint8_t mask = 1;
-            *p ^= mask;
+            *p ^= 1;
         } else if (edge.x <= max_x) {
             uint8_t* p = data + edge.y * stride + edge.x / 8;
-            uint8_t mask = 1 << (edge.x % 8);
-            *p ^= mask;
+            *p ^= (1 << (edge.x % 8));
         }
         edge_step(&edge);
     }
-
 }
 
 static inline void fctx_plot_point_bw(FContext* fctx, int16_t x, int16_t y) {
@@ -211,12 +208,10 @@ static inline void fctx_plot_point_bw(FContext* fctx, int16_t x, int16_t y) {
         int16_t max_x = fctx->flag_bounds.size.w - 1;
         if (x < 0) {
             uint8_t* p = data + y * stride;
-            uint8_t mask = 1;
-            *p ^= mask;
+            *p ^= 1;
         } else if (x <= max_x) {
             uint8_t* p = data + y * stride + x / 8;
-            uint8_t mask = 1 << (x % 8);
-            *p ^= mask;
+            *p ^= (1 << (x % 8));
         }
     }
 }
@@ -524,7 +519,6 @@ static void bezier(FContext* fctx,
     fixed_t x34, y34;
     fixed_t x123, y123;
     fixed_t x234, y234;
-    fixed_t x1234, y1234;
 
     {
         fixed_t x23, y23;
@@ -540,38 +534,19 @@ static void bezier(FContext* fctx,
         y123  = (y12 + y23) / 2;
         x234  = (x23 + x34) / 2;
         y234  = (y23 + y34) / 2;
-        x1234 = (x123 + x234) / 2;
-        y1234 = (y123 + y234) / 2;
-
-        // Angle Condition
-        int32_t a23 = atan2_lookup((int16_t)((y3 - y2) / FIXED_POINT_SCALE),
-                                   (int16_t)((x3 - x2) / FIXED_POINT_SCALE));
-        int32_t da1 = abs(a23 - atan2_lookup((int16_t)((y2 - y1) / FIXED_POINT_SCALE),
-                                             (int16_t)((x2 - x1) / FIXED_POINT_SCALE)));
-        int32_t da2 = abs(atan2_lookup((int16_t)((y4 - y3) / FIXED_POINT_SCALE),
-                                       (int16_t)((x4 - x3) / FIXED_POINT_SCALE)) - a23);
-
-        if (da1 >= TRIG_MAX_ANGLE) {
-            da1 = TRIG_MAX_ANGLE - da1;
-        }
-
-        if (da2 >= TRIG_MAX_ANGLE) {
-            da2 = TRIG_MAX_ANGLE - da2;
-        }
-
-        if (da1 + da2 < MAX_ANGLE_TOLERANCE) {
-            // Finally we can stop the recursion
-            FPoint a = {x1, y1};
-            FPoint b = {x4, y4};
-            fctx_plot_edge(fctx, &a, &b);
-            return;
-        }
     }
 
-    // Continue subdivision if points are being added successfully
-    bezier(fctx, x1, y1, x12, y12, x123, y123, x1234, y1234);
-    bezier(fctx, x1234, y1234, x234, y234, x34, y34, x4, y4);
-
+    FPoint a = {x1, y1};
+    FPoint b = {x12, y12};
+    fctx_plot_edge(fctx, &a, &b);
+    a = (FPoint){x123, y123};
+    fctx_plot_edge(fctx, &b, &a);
+    b = (FPoint){x234, y234};
+    fctx_plot_edge(fctx, &a, &b);
+    a = (FPoint){x34, y34};
+    fctx_plot_edge(fctx, &b, &a);
+    b = (FPoint){x4, y4};
+    fctx_plot_edge(fctx, &a, &b);
 }
 
 void fctx_move_to_func(FContext* fctx, FPoint* params) {
@@ -616,113 +591,124 @@ void fctx_transform_points(FContext* fctx, uint16_t pcount, FPoint* ppoints, FPo
     }
 }
 
+typedef void (*fctx_draw_cmd_func)(FContext* fctx, FPoint* params);
+
 void fctx_draw_commands(FContext* fctx, FPoint advance, void* path_data, uint16_t length) {
 
+    fctx_draw_cmd_func func;
     FPoint initpt = FPointZero;
     FPoint curpt = FPointZero;
     FPoint ctrlpt = FPointZero;
-    FPoint ppoints[3];
     FPoint tpoints[3];
 
     void* path_data_end = path_data + length;
     while (path_data < path_data_end) {
+        {
+            /* choose the draw function and parameter count. */
+            FPathDrawCommand* cmd = (FPathDrawCommand*)path_data;
+            fixed16_t* param = (fixed16_t*)&cmd->params;
+            FPoint ppoints[3];
 
-        /* choose the draw function and parameter count. */
-        FPathDrawCommand* cmd = (FPathDrawCommand*)path_data;
-        fixed16_t* param = (fixed16_t*)&cmd->params;
-        switch (cmd->code) {
-            case 'M': // "moveto"
-                ppoints[0].x = *param++;
-                ppoints[0].y = *param++;
-                curpt = ppoints[0];
-                initpt = curpt;
-                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
-                fctx_move_to_func(fctx, tpoints);
-                break;
-            case 'Z': // "closepath"
-                ppoints[0] = initpt;
-                curpt = ppoints[0];
-                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
-                fctx_line_to_func(fctx, tpoints);
-                break;
-            case 'L': // "lineto"
-                ppoints[0].x = *param++;
-                ppoints[0].y = *param++;
-                curpt = ppoints[0];
-                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
-                fctx_line_to_func(fctx, tpoints);
-                break;
-            case 'H': // "horizontal lineto"
-                ppoints[0].x = *param++;
-                ppoints[0].y = curpt.y;
-                curpt.x = ppoints[0].x;
-                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
-                fctx_line_to_func(fctx, tpoints);
-                break;
-            case 'V': // "vertical lineto"
-                ppoints[0].x = curpt.x;
-                ppoints[0].y = *param++;
-                curpt.y = ppoints[0].y;
-                fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
-                fctx_line_to_func(fctx, tpoints);
-                break;
-            case 'C': // "cubic bezier curveto"
-                ppoints[0].x = *param++;
-                ppoints[0].y = *param++;
-                ppoints[1].x = *param++;
-                ppoints[1].y = *param++;
-                ppoints[2].x = *param++;
-                ppoints[2].y = *param++;
-                ctrlpt = ppoints[1];
-                curpt = ppoints[2];
-                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
-                fctx_curve_to_func(fctx, tpoints);
-                break;
-            case 'S': // "smooth cubic bezier curveto"
-                ppoints[1].x = *param++;
-                ppoints[1].y = *param++;
-                ppoints[2].x = *param++;
-                ppoints[2].y = *param++;
-                ppoints[0].x = curpt.x - ctrlpt.x + curpt.x;
-                ppoints[0].y = curpt.y - ctrlpt.y + curpt.y;
-                ctrlpt = ppoints[1];
-                curpt = ppoints[2];
-                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
-                fctx_curve_to_func(fctx, tpoints);
-                break;
-            case 'Q': // "quadratic bezier curveto"
-                ctrlpt.x = *param++;
-                ctrlpt.y = *param++;
-                ppoints[2].x = *param++;
-                ppoints[2].y = *param++;
-                ppoints[0].x = (curpt.x      + 2 * ctrlpt.x) / 3;
-                ppoints[0].y = (curpt.y      + 2 * ctrlpt.y) / 3;
-                ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
-                ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
-                curpt = ppoints[2];
-                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
-                fctx_curve_to_func(fctx, tpoints);
-                break;
-            case 'T': // "smooth quadratic bezier curveto"
-                ctrlpt.x = curpt.x - ctrlpt.x + curpt.x;
-                ctrlpt.y = curpt.y - ctrlpt.y + curpt.y;
-                ppoints[2].x = *param++;
-                ppoints[2].y = *param++;
-                ppoints[0].x = (curpt.x      + 2 * ctrlpt.x) / 3;
-                ppoints[0].y = (curpt.y      + 2 * ctrlpt.y) / 3;
-                ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
-                ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
-                curpt = ppoints[2];
-                fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
-                fctx_curve_to_func(fctx, tpoints);
-                break;
-            default:
-                APP_LOG(APP_LOG_LEVEL_ERROR, "invalid draw command %d", cmd->code);
-                return;
+            switch (cmd->code) {
+                case 'M': // "moveto"
+                    func = fctx_move_to_func;
+                    ppoints[0].x = *param++;
+                    ppoints[0].y = *param++;
+                    curpt = ppoints[0];
+                    initpt = curpt;
+                    fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                    break;
+                case 'Z': // "closepath"
+                    func = fctx_line_to_func;
+                    ppoints[0] = initpt;
+                    curpt = ppoints[0];
+                    fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                    break;
+                case 'L': // "lineto"
+                    func = fctx_line_to_func;
+                    ppoints[0].x = *param++;
+                    ppoints[0].y = *param++;
+                    curpt = ppoints[0];
+                    fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                    fctx_line_to_func(fctx, tpoints);
+                    break;
+                case 'H': // "horizontal lineto"
+                    func = fctx_line_to_func;
+                    ppoints[0].x = *param++;
+                    ppoints[0].y = curpt.y;
+                    curpt.x = ppoints[0].x;
+                    fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                    break;
+                case 'V': // "vertical lineto"
+                    func = fctx_line_to_func;
+                    ppoints[0].x = curpt.x;
+                    ppoints[0].y = *param++;
+                    curpt.y = ppoints[0].y;
+                    fctx_transform_points(fctx, 1, ppoints, tpoints, advance);
+                    fctx_line_to_func(fctx, tpoints);
+                    break;
+                case 'C': // "cubic bezier curveto"
+                    func = fctx_curve_to_func;
+                    ppoints[0].x = *param++;
+                    ppoints[0].y = *param++;
+                    ppoints[1].x = *param++;
+                    ppoints[1].y = *param++;
+                    ppoints[2].x = *param++;
+                    ppoints[2].y = *param++;
+                    ctrlpt = ppoints[1];
+                    curpt = ppoints[2];
+                    fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                    break;
+                case 'S': // "smooth cubic bezier curveto"
+                    func = fctx_curve_to_func;
+                    ppoints[1].x = *param++;
+                    ppoints[1].y = *param++;
+                    ppoints[2].x = *param++;
+                    ppoints[2].y = *param++;
+                    ppoints[0].x = curpt.x - ctrlpt.x + curpt.x;
+                    ppoints[0].y = curpt.y - ctrlpt.y + curpt.y;
+                    ctrlpt = ppoints[1];
+                    curpt = ppoints[2];
+                    fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                    break;
+                case 'Q': // "quadratic bezier curveto"
+                    func = fctx_curve_to_func;
+                    ctrlpt.x = *param++;
+                    ctrlpt.y = *param++;
+                    ppoints[2].x = *param++;
+                    ppoints[2].y = *param++;
+                    ppoints[0].x = (curpt.x      + 2 * ctrlpt.x) / 3;
+                    ppoints[0].y = (curpt.y      + 2 * ctrlpt.y) / 3;
+                    ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
+                    ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
+                    curpt = ppoints[2];
+                    fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                    break;
+                case 'T': // "smooth quadratic bezier curveto"
+                    func = fctx_curve_to_func;
+                    ctrlpt.x = curpt.x - ctrlpt.x + curpt.x;
+                    ctrlpt.y = curpt.y - ctrlpt.y + curpt.y;
+                    ppoints[2].x = *param++;
+                    ppoints[2].y = *param++;
+                    ppoints[0].x = (curpt.x      + 2 * ctrlpt.x) / 3;
+                    ppoints[0].y = (curpt.y      + 2 * ctrlpt.y) / 3;
+                    ppoints[1].x = (ppoints[2].x + 2 * ctrlpt.x) / 3;
+                    ppoints[1].y = (ppoints[2].y + 2 * ctrlpt.y) / 3;
+                    curpt = ppoints[2];
+                    fctx_transform_points(fctx, 3, ppoints, tpoints, advance);
+                    break;
+                default:
+                    APP_LOG(APP_LOG_LEVEL_ERROR, "invalid draw command %d", cmd->code);
+                    return;
+            }
+
+            /* advance to next draw command */
+            path_data = (void*)param;
         }
 
-        /* advance to next draw command */
-        path_data = (void*)param;
+        if (func) {
+            func(fctx, tpoints);
+        }
     }
 }
 
